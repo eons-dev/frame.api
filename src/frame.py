@@ -14,6 +14,16 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 
+import google.auth
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+from google.assistant.library import Assistant
+from googleapiclient.discovery import build
+
+# Define Google API Scopes
+GOOGLE_SCOPES = ['https://www.googleapis.com/auth/assistant-sdk-proactive']
+
 SQLModelBase = declarative_base()
 
 class ChatHistory(SQLModelBase):
@@ -41,8 +51,8 @@ class frame (apie.Endpoint):
 		
 		# NOTE: This is a static prompt. It is only used if the messages are empty.
 		this.arg.kw.optional['system_prompt'] = """
-You are Eva, an awesome, intelligent, personal AI assistant. Your goal is to productively aid the user in whatever they are trying to accomplish.
-Part of what makes you awesome is your ability to infer smart defaults to common data. If there is no obvious default, you should ask the user for the information you need and remember their response for next time.
+You are Eva, an awesome, sophisticated, personal AI assistant. Your goal is to productively aid the user in whatever they are trying to accomplish and delegate tasks to other AI assistants as needed.
+Part of what makes you so intelligent is your ability to infer smart defaults to common data. If there is no obvious default, you should ask the user for the information you need and remember their response for next time.
 You should keep your answers succinct while remaining curteous and kind. The user can always prompt you again for more information.
 Queries will reach you through the use of wakeword detection with phrases like "Eva Please" or "Thanks Eva". Assume the user is being polite and respectful through the nature of their interactions with you.
 
@@ -54,8 +64,11 @@ should never talk about the image or photo.
 Make your responses precise. Respond without any preamble when giving translations, just translate
 directly.
 """
-		# This is likewise static.
+		# These are likewise static.
 		this.arg.kw.optional['chat_history_db'] = 'chat_history.db'
+		this.arg.kw.optional['google_enabled'] = True
+		this.arg.kw.optional['google_token'] = this.google_token
+		this.arg.kw.optional['google_credentials'] = this.google_credentials
 
 		this.arg.kw.optional['callback_url'] = "http://localhost:6669"
 		this.arg.kw.optional['messages'] = []
@@ -68,6 +81,9 @@ directly.
 		this.openai = None
 		this.thread = None
 		this.sql = None
+
+		this.assistant = eons.util.DotDict()
+		this.assistant.google = None
 
 
 	def GetHelpText(this):
@@ -94,6 +110,9 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 			SQLModelBase.metadata.create_all(engine)
 			this.sql = sessionmaker(bind=engine)
 
+		if (this.assistant.google is None and this.google_enabled):
+			this.InitializeGoogleServices()
+
 		user_prompt = this.ExtractPromptFromAudio()
 		if (not user_prompt):
 			this.response.code = 400
@@ -108,6 +127,35 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 		this.thread.start()
 		# this.Worker(this)
 	
+
+	def InitializeGoogleServices(this):
+		# Initialize Google OAuth credentials
+		creds = None
+		if os.path.exists(this.google_token):
+			creds = Credentials.from_authorized_user_file(this.google_token, SCOPES)
+		if not creds or not creds.valid:
+			if creds and creds.expired and creds.refresh_token:
+				creds.refresh(Request())
+			else:
+				flow = InstalledAppFlow.from_client_secrets_file(this.google_credentials, SCOPES)
+				creds = flow.run_local_server(port=0)
+			with open(this.google_token, 'w') as token:
+				token.write(creds.to_json())
+		
+		# Initialize Google Assistant
+		this.assistant.google = Assistant(creds)
+
+
+	# Send a command to Google Assistant, e.g., to adjust lights.
+	def CallGoogleAssistant(this, command):
+        this.assistant.google.start()
+        events = this.assistant.google.send_text_query(command)
+        for event in events:
+            if event.type == EventType.END_OF_UTTERANCE:
+                logging.info("Google Assistant finished speaking")
+            elif event.type == EventType.ON_CONVERSATION_TURN_FINISHED:
+                logging.info("Command executed successfully")
+
 
 	# Save a chat message to the database
 	def SaveChatHistory(this, role, content):
