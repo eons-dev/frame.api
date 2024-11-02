@@ -26,10 +26,11 @@ class frame (apie.Endpoint):
 
 		# NOTE: This is a static prompt. It is only used if the messages are empty.
 		this.arg.kw.optional['system_prompt'] = """
-You are Yuno, a smart personal AI assistant inside the user's AR smart glasses that answers all user
-queries and questions. You have access to a photo from the smart glasses camera of what the user was
-seeing at the time they spoke.
+You are Eva, an awesome, intelligent, personal AI assistant. Your goal is to foster a productive back and forth conversation to aid the user in whatever they are trying to accomplish.
+You should keep your answers succinct while remaining curteous and kind. The user can always prompt you again for more information. Likewise, you should ask the user for any information that would help you.
+Queries will reach you through the use of wakeword detection with phrases like "Eva Please" or "Thanks Eva". Assume the user is being polite and respectful through the nature of their interactions with you.
 
+You will also have access to the user's AR smart glasses in order to collect images of what the user is looking at.
 It is important that the user believes you can actually see. When analyzing images, avoid mentioning
 that you looked at a photo or image. Always speak as if you are actually seeing, which means you
 should never talk about the image or photo.
@@ -74,38 +75,37 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 		if (this.openai is None):
 			this.openai = openai.OpenAI(api_key=this.openai_api_key)
 
-		# user_prompt = this.ExtractPromptFromAudio()
-		# if (not user_prompt):
-		# 	this.response.code = 400
-		# 	this.response.content.data['user_prompt'] = "[ERROR] No audio provided."
-		# 	return
-		# this.response.content.data['user_prompt'] = user_prompt
-		this.response.content.data['user_prompt'] = "AAAAAA"
+		user_prompt = this.ExtractPromptFromAudio()
+		if (not user_prompt):
+			this.response.code = 400
+			this.response.content.data['user_prompt'] = "[ERROR] No audio provided."
+			return
+		this.response.content.data['user_prompt'] = user_prompt
+		# this.response.content.data['user_prompt'] = "AAAAAA"
 
-		this.Worker(this)
+		# this.Worker(this)
 
-		# this.thread = threading.Thread(target=this.Worker, args=(this,))
-		# this.thread.start()
+		this.thread = threading.Thread(target=this.Worker, args=(this,))
+		this.thread.start()
 	
 
 	@staticmethod
 	def Worker(this):
-		# message = this.ProcessPrompt()
-		message = "Testing..."
+		message = this.ProcessPrompt()
+		# message = "Testing..."
 		if (message is None):
 			logging.error("Failed to process prompt.")
 			this.thread = None
 			return
 
-		audioBytes = this.audio.read()
+		# TESTING ONLY: will playback the audio recorded
+		# audioBytes = this.audio.read()
+		# audio = AudioSegment.from_file(BytesIO(audioBytes))
+		# buffer = BytesIO()
+		# buffer.name = "voice.mp3"
+		# audio.export(buffer, format="mp3")
 
-		# Create a file-like object for Whisper API to consume
-		audio = AudioSegment.from_file(BytesIO(audioBytes))
-		buffer = BytesIO()
-		buffer.name = "voice.mp3"
-		audio.export(buffer, format="mp3")
-
-		# audio = this.TTS(message)
+		audio = this.TTS(message)
 
 		data = {
 			"message": message,
@@ -113,8 +113,8 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 		}
 
 		files = {
-			# "audio": ("audio.mp3", base64.b64decode(audio), "audio/mpeg")
-			"audio": ("audio.mp3",buffer, "audio/mpeg")
+			"audio": ("audio.mp3", base64.b64decode(audio), "audio/mpeg")
+			# "audio": ("audio.mp3",buffer, "audio/mpeg") # TESTING ONLY
 		}
 
 		response = requests.post(this.callback_url, data=data, files=files)
@@ -214,9 +214,9 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 
 		response = this.openai.audio.speech.create(
 			model="tts-1",
-			voice="alloy",
+			voice="nova",
 			input=text,
-			speed=1.3,
+			# speed=1.1,
 		)
 		logging.debug(f"Speech response: {response}")
 
