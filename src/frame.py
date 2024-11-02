@@ -9,6 +9,21 @@ import threading
 import requests
 from pydub import AudioSegment
 from io import BytesIO
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from datetime import datetime
+
+SQLModelBase = declarative_base()
+
+class ChatHistory(SQLModelBase):
+	__tablename__ = 'chat_history'
+	
+	id = Column(Integer, primary_key=True)
+	timestamp = Column(DateTime, default=datetime.utcnow)
+	role = Column(String, nullable=False)
+	content = Column(Text, nullable=False)
+
 
 class frame (apie.Endpoint):
 	def __init__(this, name="Brilliant Labs Frame"):
@@ -23,13 +38,15 @@ class frame (apie.Endpoint):
 		this.arg.kw.optional['openai_model'] = 'gpt-4o'
 		this.arg.kw.optional['openai_max_tokens'] = 1000
 		this.arg.kw.optional['openai_temperature'] = 0.1
-
+		
 		# NOTE: This is a static prompt. It is only used if the messages are empty.
 		this.arg.kw.optional['system_prompt'] = """
-You are Eva, an awesome, intelligent, personal AI assistant. Your goal is to foster a productive back and forth conversation to aid the user in whatever they are trying to accomplish.
-You should keep your answers succinct while remaining curteous and kind. The user can always prompt you again for more information. Likewise, you should ask the user for any information that would help you.
+You are Eva, an awesome, intelligent, personal AI assistant. Your goal is to productively aid the user in whatever they are trying to accomplish.
+Part of what makes you awesome is your ability to infer smart defaults to common data. If there is no obvious default, you should ask the user for the information you need and remember their response for next time.
+You should keep your answers succinct while remaining curteous and kind. The user can always prompt you again for more information.
 Queries will reach you through the use of wakeword detection with phrases like "Eva Please" or "Thanks Eva". Assume the user is being polite and respectful through the nature of their interactions with you.
-
+"""
+"""
 You will also have access to the user's AR smart glasses in order to collect images of what the user is looking at.
 It is important that the user believes you can actually see. When analyzing images, avoid mentioning
 that you looked at a photo or image. Always speak as if you are actually seeing, which means you
@@ -38,6 +55,8 @@ should never talk about the image or photo.
 Make your responses precise. Respond without any preamble when giving translations, just translate
 directly.
 """
+		# This is likewise static.
+		this.arg.kw.optional['chat_history_db'] = 'chat_history.db'
 
 		this.arg.kw.optional['callback_url'] = "http://localhost:6669"
 		this.arg.kw.optional['messages'] = []
@@ -49,6 +68,7 @@ directly.
 
 		this.openai = None
 		this.thread = None
+		this.sql = None
 
 
 	def GetHelpText(this):
@@ -61,11 +81,6 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 
 	def Call(this):
 		this.response.content.data['user_prompt'] = "[ERROR] Please try again."
-		
-		# TODO: What is this?
-		# this.response.content.data['debug'] = {
-		# 	"topic_changed": False
-		# }
 
 		if (this.thread is not None):
 			this.response.code = 400
@@ -75,6 +90,11 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 		if (this.openai is None):
 			this.openai = openai.OpenAI(api_key=this.openai_api_key)
 
+		if (this.sql is None):
+			engine = create_engine(f"sqlite:///{this.chat_history_db}")
+			SQLModelBase.metadata.create_all(engine)
+			this.sql = sessionmaker(bind=engine)
+
 		user_prompt = this.ExtractPromptFromAudio()
 		if (not user_prompt):
 			this.response.code = 400
@@ -82,13 +102,39 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 			return
 		this.response.content.data['user_prompt'] = user_prompt
 		# this.response.content.data['user_prompt'] = "AAAAAA"
-
-		# this.Worker(this)
+		# Store user prompt in chat history
+		this.SaveChatHistory("user", user_prompt)
 
 		this.thread = threading.Thread(target=this.Worker, args=(this,))
 		this.thread.start()
+		# this.Worker(this)
 	
 
+	# Save a chat message to the database
+	def SaveChatHistory(this, role, content):
+		with this.sql() as session:
+			chat_entry = ChatHistory(role=role, content=content)
+			session.add(chat_entry)
+			session.commit()
+
+
+	# Retrieve chat history from the database
+	def RetrieveChatHistory(this):
+		try:
+			with this.sql() as session:
+				messages = [
+					{"role": entry.role, "content": entry.content} 
+					for entry in session.query(ChatHistory)
+						.order_by(ChatHistory.timestamp.desc())
+						.limit(10)
+						.all()
+				]
+			return list(reversed(messages))  # Return in chronological order
+		except Exception as e:
+			logging.error(f"Failed to retrieve chat history: {e}")
+			return []
+
+	
 	@staticmethod
 	def Worker(this):
 		message = this.ProcessPrompt()
@@ -97,13 +143,8 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 			logging.error("Failed to process prompt.")
 			this.thread = None
 			return
-
-		# TESTING ONLY: will playback the audio recorded
-		# audioBytes = this.audio.read()
-		# audio = AudioSegment.from_file(BytesIO(audioBytes))
-		# buffer = BytesIO()
-		# buffer.name = "voice.mp3"
-		# audio.export(buffer, format="mp3")
+		# Save assistant's message to chat history
+		this.SaveChatHistory("assistant", message)
 
 		audio = this.TTS(message)
 
@@ -114,7 +155,6 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 
 		files = {
 			"audio": ("audio.mp3", base64.b64decode(audio), "audio/mpeg")
-			# "audio": ("audio.mp3",buffer, "audio/mpeg") # TESTING ONLY
 		}
 
 		response = requests.post(this.callback_url, data=data, files=files)
@@ -124,8 +164,7 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 
 
 	def ProcessPrompt(this):
-		# Prepare the prompt.
-		# This includes audio and image processing.
+		# Prepare the prompt, including audio and image processing
 		messages = this.GetPromptMessages()
 		if (messages is None):
 			return
@@ -150,8 +189,6 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 			return None
 
 		audioBytes = this.audio.read()
-
-		# Create a file-like object for Whisper API to consume
 		audio = AudioSegment.from_file(BytesIO(audioBytes))
 		buffer = BytesIO()
 		buffer.name = "voice.mp4"
@@ -172,12 +209,11 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 
 		imageBytes = this.image.read()
 
-		# TODO: Image processing, if needed.
-
+		# Image processing (if needed)
 		imageB64 = base64.b64encode(imageBytes).decode('utf-8')
 		return imageB64
 
-	
+
 	def GetPromptMessages(this):
 		messages = this.messages
 		if (not len(messages)):
@@ -187,6 +223,7 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 					{"type": "text", "text": this.system_prompt}
 				]
 			}]
+			messages.extend(this.RetrieveChatHistory())
 
 		user_message = {
 			"role": "user",
@@ -203,10 +240,10 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 					"url": f"data:image/png;base64,{image}"
 				}
 			})
-		
-		messages.append(user_message)
 
+		messages.append(user_message)
 		return messages
+
 
 	def TTS(this, text):
 		speechTempFile = tempfile.NamedTemporaryFile(suffix=".mp3")
@@ -216,7 +253,6 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 			model="tts-1",
 			voice="nova",
 			input=text,
-			# speed=1.1,
 		)
 		logging.debug(f"Speech response: {response}")
 
