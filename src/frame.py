@@ -15,16 +15,16 @@ from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 from pathlib import Path
 
-import google.auth
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
-from google.assistant.library import Assistant
-from google.assistant.library.event import EventType
-from googleapiclient.discovery import build
+# import google.auth
+# from google.oauth2.credentials import Credentials
+# from google_auth_oauthlib.flow import InstalledAppFlow
+# from google.auth.transport.requests import Request
+# from google.assistant.library import Assistant
+# from google.assistant.library.event import EventType
+# from googleapiclient.discovery import build
 
 # Define Google API Scopes
-GOOGLE_SCOPES = ['https://www.googleapis.com/auth/assistant-sdk-proactive']
+# GOOGLE_SCOPES = ['https://www.googleapis.com/auth/assistant-sdk-proactive']
 
 SQLModelBase = declarative_base()
 
@@ -68,14 +68,15 @@ directly.
 """
 		# These are likewise static.
 		this.arg.kw.optional['chat_history_db'] = 'chat_history.db'
-		this.arg.kw.optional['google_enabled'] = True
-		this.arg.kw.optional['google_token'] = this.google_token
-		this.arg.kw.optional['google_credentials'] = this.google_credentials
+		# this.arg.kw.optional['google_enabled'] = True
+		# this.arg.kw.optional['google_token'] = this.google_token
+		# this.arg.kw.optional['google_credentials'] = this.google_credentials
 
 		this.arg.kw.optional['callback_url'] = "http://localhost:6669"
 		this.arg.kw.optional['messages'] = []
 		this.arg.kw.optional['location'] = ""
 		this.arg.kw.optional['time'] = ""
+		# this.arg.kw.optional['headless'] = True
 
 		this.arg.kw.optional['audio'] = None
 		this.arg.kw.optional['image'] = None
@@ -85,31 +86,32 @@ directly.
 		this.sql = None
 
 		this.assistant = eons.util.DotDict()
-		this.assistant.google = None
+		# this.assistant.google = None
 
 		# Define the function metadata for OpenAI function calling
 		this.tool = eons.util.DotDict()
-		this.tool.google_assistant = {
-			"name": "google_assistant",
-			"description": "Delegate a command to Google Assistant in natural language for execution.",
-			"parameters": {
-				"type": "object",
-				"properties": {
-					"command": {
-						"type": "string",
-						"description": "A plain-English command to be executed by Google Assistant. Examples include 'Turn off the lights in the bedroom' or 'Play jazz music in the living room.'"
-					}
-				},
-				"required": ["command"]
-			}
-		}
+		# this.tool.google_assistant = {
+		# 	"name": "google_assistant",
+		# 	"description": "Delegate a command to Google Assistant in natural language for execution.",
+		# 	"parameters": {
+		# 		"type": "object",
+		# 		"properties": {
+		# 			"command": {
+		# 				"type": "string",
+		# 				"description": "A plain-English command to be executed by Google Assistant. Examples include 'Turn off the lights in the bedroom' or 'Play jazz music in the living room.'"
+		# 			}
+		# 		},
+		# 		"required": ["command"]
+		# 	}
+		# }
 
 
 	def GetHelpText(this):
 		return '''\
 Backend for the Brilliant Labs Frame app (e.g. Noa).
 This replaces the noa-assistant app.
-NOTE: The system_prompt is essentially static. It is only used if the messages are empty.
+NOTE: The system_prompt, chat_history, and google_ vars are essentially static and only accessed on the first run.
+
 '''
 
 
@@ -129,8 +131,8 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 			SQLModelBase.metadata.create_all(engine)
 			this.sql = sessionmaker(bind=engine)
 
-		if (this.assistant.google is None and this.google_enabled):
-			this.InitializeGoogleServices()
+		# if (this.assistant.google is None and this.google_enabled):
+		# 	this.InitializeGoogleServices()
 
 		user_prompt = this.ExtractPromptFromAudio()
 		if (not user_prompt):
@@ -147,27 +149,52 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 		# this.Worker(this)
 	
 
-	def InitializeGoogleServices(this):
-		creds = None
-		token_path = Path(this.google_token)
+	# def InitializeGoogleServices(this):
+	# 	creds = None
+	# 	token_path = Path(this.google_token)  # Path where token is stored
+	# 	client_secret_path = Path(this.google_credentials)  # Path to client_secret.json file
 
-		# Check if the token file exists
-		if token_path.exists():
-			creds = Credentials.from_authorized_user_file(str(token_path), GOOGLE_SCOPES)
+	# 	try:
+	# 		# Load credentials from token if available
+	# 		if token_path.exists():
+	# 			creds = Credentials.from_authorized_user_file(str(token_path), GOOGLE_SCOPES)
+	# 			logging.info("Loaded credentials from token file.")
 
-		# Refresh credentials if needed or initiate authorization flow
-		if not creds or not creds.valid:
-			if creds and creds.expired and creds.refresh_token:
-				creds.refresh(Request())
-			else:
-				flow = InstalledAppFlow.from_client_secrets_file(str(Path(this.google_credentials)), GOOGLE_SCOPES)
-				creds = flow.run_local_server(port=0)
+	# 		# Check if credentials need refreshing or if they are invalid
+	# 		if not creds or not creds.valid:
+	# 			if creds and creds.expired and creds.refresh_token:
+	# 				# Refresh the token without needing user interaction
+	# 				creds.refresh(Request())
+	# 				logging.info("Refreshed expired credentials.")
+	# 			else:
+	# 				# Initiate the OAuth flow to get new credentials
+	# 				flow = InstalledAppFlow.from_client_secrets_file(str(client_secret_path), GOOGLE_SCOPES)
+					
+	# 				# Generate authorization URL and prompt user to open it on a different machine
+	# 				auth_url, _ = flow.authorization_url(prompt='consent')
+	# 				print("Please go to this URL in a browser and authorize the application:")
+	# 				print(auth_url)
+	# 				logging.critical(f"Please go to the authorization URL in a browser and authorize the application: {auth_url}")
+					
+	# 				# Get the authorization code from the user
+	# 				auth_code = input("Enter the authorization code here: ").strip()
 
-			# Save the refreshed or newly obtained credentials to the token file
-			token_path.write_text(creds.to_json())
-		
-		# Initialize Google Assistant
-		this.assistant.google = Assistant(creds)
+	# 				# Complete the OAuth flow
+	# 				flow.fetch_token(code=auth_code)
+	# 				creds = flow.credentials
+	# 				logging.info("Credentials obtained from OAuth flow.")
+
+	# 			# Save the credentials for future use
+	# 			token_path.write_text(creds.to_json())
+	# 			logging.info(f"Credentials saved to {token_path}.")
+
+	# 		# Initialize Google Assistant with the obtained credentials
+	# 		this.assistant.google = Assistant(creds)
+	# 		logging.info("Google Assistant initialized successfully.")
+
+	# 	except Exception as e:
+	# 		logging.error(f"Failed to initialize Google services: {e}")
+	# 		raise
 
 
 	# Save a chat message to the database
@@ -237,8 +264,8 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 				messages=messages, 
 				max_tokens=this.openai_max_tokens,
 				temperature=this.openai_temperature,
-				functions=this.tool.values(),
-				function_call="auto",
+				# functions=this.tool.values(),
+				# function_call="auto",
 				top_p=1,
 				n=1,
 				stream=False,
@@ -370,17 +397,17 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 	# These should match the this.tool keys with "tool_" prepended
 
 	# Send a natural language command to Google Assistant.
-	def tool_google_assistant(this, function_args):
-		command = function_args.get("command")
+	# def tool_google_assistant(this, function_args):
+	# 	command = function_args.get("command")
 
-		this.assistant.google.start()
-		events = this.assistant.google.send_text_query(command)
-		for event in events:
-			if event.type == EventType.END_OF_UTTERANCE:
-				logging.info("Google Assistant finished speaking")
-			elif event.type == EventType.ON_CONVERSATION_TURN_FINISHED:
-				logging.info("Command executed successfully")
-		this.assistant.google.stop()
-		return f"Sent command to Google Assistant: {command}"
+	# 	this.assistant.google.start()
+	# 	events = this.assistant.google.send_text_query(command)
+	# 	for event in events:
+	# 		if event.type == EventType.END_OF_UTTERANCE:
+	# 			logging.info("Google Assistant finished speaking")
+	# 		elif event.type == EventType.ON_CONVERSATION_TURN_FINISHED:
+	# 			logging.info("Command executed successfully")
+	# 	this.assistant.google.stop()
+	# 	return f"Sent command to Google Assistant: {command}"
 
 	# END Tools
