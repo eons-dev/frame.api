@@ -41,9 +41,9 @@ class frame (apie.Endpoint):
 		
 		# NOTE: This is a static prompt. It is only used if the messages are empty.
 		this.arg.kw.optional['system_prompt'] = """
-You are Eva, an awesome, intelligent, personal AI assistant. Your goal is to productively aid the user in whatever they are trying to accomplish.
-Part of what makes you awesome is your ability to infer smart defaults to common data. If there is no obvious default, you should ask the user for the information you need and remember their response for next time.
-You should keep your answers succinct while remaining curteous and kind. The user can always prompt you again for more information.
+You are Eva, an awesome, sophisticated, personal AI assistant. Your goal is to productively aid the user in whatever they are trying to accomplish and delegate tasks to other AI assistants as needed.
+Part of what makes you so intelligent is your ability to infer smart defaults to common data. If there is no obvious default, you should ask the user for the information you need and remember their response for next time.
+You should keep your answers succinct while remaining courteous and kind. The user can always prompt you again for more information.
 Queries will reach you through the use of wakeword detection with phrases like "Eva Please" or "Thanks Eva". Assume the user is being polite and respectful through the nature of their interactions with you.
 
 You will also have access to the user's AR smart glasses in order to collect images of what the user is looking at.
@@ -68,6 +68,12 @@ directly.
 		this.openai = None
 		this.thread = None
 		this.sql = None
+
+		this.assistant = eons.util.DotDict()
+		# TODO: Future assistants will go here.
+
+		this.tool = eons.util.DotDict()
+		# TODO: Future tools will go here.
 
 
 	def GetHelpText(this):
@@ -178,7 +184,42 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 			stream=False,
 			presence_penalty=0,
 			frequency_penalty=0,
+			# functions=this.tool.values(),
+			# function_call="auto",
 		)
+
+		# reply = response.choices[0].message["content"]
+
+		# if (response.choices[0].finish_reason == "function_call"):
+		# 	function_name = response.choices[0].message["function_call"]["name"]
+		# 	function_args = json.loads(response.choices[0].message["function_call"]["arguments"])
+
+		# 	if (function_name not in this.tool):
+		# 		logging.error(f"[ERROR] Tool '{function_name}' not found.")
+		# 		return "[ERROR] Tool not found."
+
+		# 	# Execute tool if found
+		# 	function_response = getattr(this, f"tool_{function_name}")(function_args)
+
+		# 	# Send function response back to OpenAI for final response
+		# 	final_messages = [
+		# 		*messages,
+		# 		{"role": "assistant", "content": None, "function_call": response.choices[0].message["function_call"]},
+		# 		{"role": "function", "name": function_name, "content": function_response}
+		# 	]
+
+		# 	try:
+		# 		final_response = this.openai.ChatCompletion.create(
+		# 			model=this.openai_model,
+		# 			messages=final_messages
+		# 		)
+		# 		reply = final_response.choices[0].message["content"]
+
+		# 	except Exception as e:
+		# 		logging.error(f"Failed to retrieve final response: {e}")
+		# 		reply = "[ERROR] Failed to retrieve final response."
+
+		# return reply
 
 		return response.choices[0].message.content
 
@@ -262,3 +303,9 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 		speechTempFile.close()
 
 		return speechB64
+
+	# BEGIN Tools
+	# These should match the this.tool keys with "tool_" prepended
+	# For example: tool_google_assistant(this, function_args):
+
+	# END Tools
