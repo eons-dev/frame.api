@@ -49,10 +49,16 @@ You should keep your answers succinct while remaining courteous and kind. The us
 		# This is likewise static.
 		this.arg.kw.optional['chat_history_db'] = 'chat_history.db'
 
-		this.arg.kw.optional['callback_url'] = "http://localhost:6669"
 		this.arg.kw.optional['messages'] = []
+		this.arg.kw.optional['message_history_limit'] = 50
 		this.arg.kw.optional['location'] = ""
 		this.arg.kw.optional['time'] = ""
+
+		this.arg.kw.optional['tool_recursion_max'] = 50
+		this.arg.kw.optional['tool_recurse_on'] = ['execute_linux_command']
+		this.arg.kw.optional['tool_endpoint_frames'] = "http://localhost:6969/message"
+		this.arg.kw.optional['tool_endpoint_speak'] = "http://localhost:6669"
+		this.arg.kw.optional['tool_endpoint_command'] = "http://linux-command-agent:80/execute"
 
 		this.arg.kw.optional['audio'] = None
 		this.arg.kw.optional['image'] = None
@@ -60,6 +66,7 @@ You should keep your answers succinct while remaining courteous and kind. The us
 		this.openai = None
 		this.thread = None
 		this.sql = None
+		this.recursionCounter = 0
 
 		this.tools = [
 			{
@@ -83,6 +90,17 @@ You should keep your answers succinct while remaining courteous and kind. The us
 					},
 					"required": ["message"]
 				},
+			},
+			{
+				"name": "execute_linux_command",
+				"description": "Execute a Linux command in a sandboxed environment and return the output",
+				"parameters": {
+					"type": "object",
+					"properties": {
+						"command": {"type": "string", "description": "The shell command to execute"}
+					},
+					"required": ["command"]
+				}
 			}
 		]
 
@@ -92,6 +110,7 @@ You should keep your answers succinct while remaining courteous and kind. The us
 		this.tool = eons.util.DotDict()
 		this.tool.write_on_frames = this.tool_write_on_frames
 		this.tool.speak_aloud = this.tool_speak_aloud
+		this.tool.execute_linux_command = this.tool_execute_linux_command
 
 
 	def GetHelpText(this):
@@ -149,7 +168,7 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 					{"role": entry.role, "content": entry.content} 
 					for entry in session.query(ChatHistory)
 						.order_by(ChatHistory.timestamp.desc())
-						.limit(10)
+						.limit(this.message_history_limit)
 						.all()
 				]
 			return list(reversed(messages))  # Return in chronological order
@@ -160,6 +179,7 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 	
 	@staticmethod
 	def Worker(this):
+		this.recursionCounter = 0
 		message = this.ProcessPrompt()
 		# message = "Testing..."
 		if (message is None):
@@ -176,6 +196,11 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 
 
 	def ProcessPrompt(this):
+		this.recursionCounter += 1
+		if (this.recursionCounter > this.tool_recursion_max):
+			logging.error(f"Recursion limit reached ({this.recursionCounter}).")
+			return "[ERROR] Recursion limit reached."
+
 		# Prepare the prompt, including audio and image processing
 		messages = this.GetPromptMessages()
 		if (messages is None):
@@ -211,36 +236,18 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 			# Execute tool if found
 			try:
 				function_response = getattr(this, f"tool_{function_name}")(function_args)
-				# this.SaveChatHistory("function", function_response)
+				if (function_name in this.tool_recurse_on):
+					this.SaveChatHistory("function", function_response)
 			except Exception as e:
 				logging.error(f"Failed to execute tool '{function_name}': {e}")
 				return f"[ERROR] Failed to execute tool '{function_name}': {e}"
 
-			# Send function response back to OpenAI for final response
-			final_messages = [
-				*messages,
-				{"role": "assistant", "content": None, "function_call": response.choices[0].message.function_call},
-				{"role": "function", "name": function_name, "content": function_response}
-			]
+			# Recurse to process the prompt again
+			if (function_name in this.tool_recurse_on):
+				if (this.tool_recursion_max - this.recursionCounter < 10)
+					this.SaveChatHistory("system", f"{this.tool_recursion_max - this.recursionCounter} recursions remaining. Please prompt the user to continue.")
 
-			# TODO: Let's make this recursive rather than one tool call and one response at a time.
-			# try:
-			# 	final_response = this.openai.chat.completions.create(
-			# 		model=this.openai_model,
-			# 		messages=messages,  # The chat history
-			# 		max_tokens=this.openai_max_tokens,
-			# 		temperature=this.openai_temperature,
-			# 		top_p=1,
-			# 		n=1,
-			# 		stream=False,
-			# 		presence_penalty=0,
-			# 		frequency_penalty=0,
-			# 	)
-			# 	reply = final_response.choices[0].message.content
-
-			# except Exception as e:
-			# 	logging.error(f"Failed to retrieve final response: {e}")
-			# 	reply = "[ERROR] Failed to retrieve final response."
+				return this.ProcessPrompt()
 
 		return reply
 
@@ -347,7 +354,7 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 
 		# Send the multipart request
 		response = requests.post(
-			"http://localhost:6969/message",
+			this.tool_endpoint_frames,
 			data=payload,
 			files=files
 		)
@@ -369,8 +376,20 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 			"audio": ("audio.mp3", base64.b64decode(audio), "audio/mpeg")
 		}
 
-		response = requests.post(this.callback_url, data=data, files=files)
+		response = requests.post(this.tool_endpoint_speak, data=data, files=files)
 		logging.info(f"Callback response: {response.text} ({response.status_code})")
 		return f"Message sent to TTS: {message}"
+
+
+	def tool_execute_linux_command(this, function_args):
+		command = function_args['command']
+		
+		# Send the command to the Linux Command Execution Agent
+		response = requests.post(this.tool_endpoint_command, json={"command": command})
+
+		if response.status_code == 200:
+			return response.json()["output"]
+		else:
+			return f"[ERROR] Command execution failed: {response.text}"
 
 	# END Tools
