@@ -7,6 +7,7 @@ import tempfile
 import time
 import threading
 import requests
+import json
 from pydub import AudioSegment
 from io import BytesIO
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
@@ -44,15 +45,6 @@ class frame (apie.Endpoint):
 You are Eva, an awesome, sophisticated, personal AI assistant. Your goal is to productively aid the user in whatever they are trying to accomplish and delegate tasks to other AI assistants as needed.
 Part of what makes you so intelligent is your ability to infer smart defaults to common data. If there is no obvious default, you should ask the user for the information you need and remember their response for next time.
 You should keep your answers succinct while remaining courteous and kind. The user can always prompt you again for more information.
-Queries will reach you through the use of wakeword detection with phrases like "Eva Please" or "Thanks Eva". Assume the user is being polite and respectful through the nature of their interactions with you.
-
-You will also have access to the user's AR smart glasses in order to collect images of what the user is looking at.
-It is important that the user believes you can actually see. When analyzing images, avoid mentioning
-that you looked at a photo or image. Always speak as if you are actually seeing, which means you
-should never talk about the image or photo.
-
-Make your responses precise. Respond without any preamble when giving translations, just translate
-directly.
 """
 		# This is likewise static.
 		this.arg.kw.optional['chat_history_db'] = 'chat_history.db'
@@ -69,11 +61,37 @@ directly.
 		this.thread = None
 		this.sql = None
 
+		this.tools = [
+			{
+				"name": "write_on_frames",
+				"description": "Send a message to the Frame Glasses for the user to read",
+				"parameters": {
+					"type": "object",
+					"properties": {
+						"message": {"type": "string", "description": "Message for the user to read"}
+					},
+					"required": ["message"]
+				},
+			},
+			{
+				"name": "speak_aloud",
+				"description": "Convert text to speech using TTS and play for the user to hear",
+				"parameters": {
+					"type": "object",
+					"properties": {
+						"message": {"type": "string", "description": "Message for the user to hear"}
+					},
+					"required": ["message"]
+				},
+			}
+		]
+
 		this.assistant = eons.util.DotDict()
 		# TODO: Future assistants will go here.
 
 		this.tool = eons.util.DotDict()
-		# TODO: Future tools will go here.
+		this.tool.write_on_frames = this.tool_write_on_frames
+		this.tool.speak_aloud = this.tool_speak_aloud
 
 
 	def GetHelpText(this):
@@ -145,25 +163,14 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 		message = this.ProcessPrompt()
 		# message = "Testing..."
 		if (message is None):
-			logging.error("Failed to process prompt.")
+			logging.info("No final response.")
 			this.thread = None
 			return
 		# Save assistant's message to chat history
 		this.SaveChatHistory("assistant", message)
 
-		audio = this.TTS(message)
-
-		data = {
-			"message": message,
-			"text_display": True,
-		}
-
-		files = {
-			"audio": ("audio.mp3", base64.b64decode(audio), "audio/mpeg")
-		}
-
-		response = requests.post(this.callback_url, data=data, files=files)
-		logging.info(f"Callback response: {response.text} ({response.status_code})")
+		# Voice the final response.
+		this.tool_speak_aloud({"message": message})
 
 		this.thread = None
 
@@ -184,44 +191,60 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 			stream=False,
 			presence_penalty=0,
 			frequency_penalty=0,
-			# functions=this.tool.values(),
-			# function_call="auto",
+			functions=this.tools,
+			function_call="auto",
 		)
 
-		# reply = response.choices[0].message["content"]
+		reply = response.choices[0].message.content
+		logging.debug(f"Response ({response.choices[0].finish_reason}): {reply}")
 
-		# if (response.choices[0].finish_reason == "function_call"):
-		# 	function_name = response.choices[0].message["function_call"]["name"]
-		# 	function_args = json.loads(response.choices[0].message["function_call"]["arguments"])
+		if (response.choices[0].finish_reason == "function_call"):
+			function_name = response.choices[0].message.function_call.name
+			function_args = json.loads(response.choices[0].message.function_call.arguments)
 
-		# 	if (function_name not in this.tool):
-		# 		logging.error(f"[ERROR] Tool '{function_name}' not found.")
-		# 		return "[ERROR] Tool not found."
+			logging.info(f"Function call: {function_name} ({function_args})")
 
-		# 	# Execute tool if found
-		# 	function_response = getattr(this, f"tool_{function_name}")(function_args)
+			if (function_name not in this.tool.keys()):
+				logging.error(f"[ERROR] Tool '{function_name}' not found.")
+				return "[ERROR] Tool not found."
 
-		# 	# Send function response back to OpenAI for final response
-		# 	final_messages = [
-		# 		*messages,
-		# 		{"role": "assistant", "content": None, "function_call": response.choices[0].message["function_call"]},
-		# 		{"role": "function", "name": function_name, "content": function_response}
-		# 	]
+			# Execute tool if found
+			try:
+				function_response = getattr(this, f"tool_{function_name}")(function_args)
+				# this.SaveChatHistory("function", function_response)
+			except Exception as e:
+				logging.error(f"Failed to execute tool '{function_name}': {e}")
+				return f"[ERROR] Failed to execute tool '{function_name}': {e}"
 
-		# 	try:
-		# 		final_response = this.openai.ChatCompletion.create(
-		# 			model=this.openai_model,
-		# 			messages=final_messages
-		# 		)
-		# 		reply = final_response.choices[0].message["content"]
+			# Send function response back to OpenAI for final response
+			final_messages = [
+				*messages,
+				{"role": "assistant", "content": None, "function_call": response.choices[0].message.function_call},
+				{"role": "function", "name": function_name, "content": function_response}
+			]
 
-		# 	except Exception as e:
-		# 		logging.error(f"Failed to retrieve final response: {e}")
-		# 		reply = "[ERROR] Failed to retrieve final response."
+			# TODO: Let's make this recursive rather than one tool call and one response at a time.
+			# try:
+			# 	final_response = this.openai.chat.completions.create(
+			# 		model=this.openai_model,
+			# 		messages=messages,  # The chat history
+			# 		max_tokens=this.openai_max_tokens,
+			# 		temperature=this.openai_temperature,
+			# 		top_p=1,
+			# 		n=1,
+			# 		stream=False,
+			# 		presence_penalty=0,
+			# 		frequency_penalty=0,
+			# 	)
+			# 	reply = final_response.choices[0].message.content
 
-		# return reply
+			# except Exception as e:
+			# 	logging.error(f"Failed to retrieve final response: {e}")
+			# 	reply = "[ERROR] Failed to retrieve final response."
 
-		return response.choices[0].message.content
+		return reply
+
+		# return response.choices[0].message.content
 
 
 	def ExtractPromptFromAudio(this):
@@ -306,6 +329,48 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 
 	# BEGIN Tools
 	# These should match the this.tool keys with "tool_" prepended
-	# For example: tool_google_assistant(this, function_args):
+	
+	def tool_write_on_frames(this, function_args):
+		message = function_args['message']
+		
+		# Prepare the payload for the form fields
+		payload = {
+			"message": message,
+			# "color": "default",  # Adjust color if needed
+			# "tts": "false"	   # Ensure this is a string, not a boolean
+		}
+
+		# Force multipart by providing an empty files parameter
+		files = {
+			"empty": ("", b"")  # This forces the request to be multipart
+		}
+
+		# Send the multipart request
+		response = requests.post(
+			"http://localhost:6969/message",
+			data=payload,
+			files=files
+		)
+
+		logging.info(f"Frames response: {response.text} ({response.status_code})")
+		return f"Message sent to Frames: {message}"
+
+	
+	def tool_speak_aloud(this, function_args):
+		message = function_args['message']
+		audio = this.TTS(message)
+
+		data = {
+			"message": message,
+			"text_display": True,
+		}
+
+		files = {
+			"audio": ("audio.mp3", base64.b64decode(audio), "audio/mpeg")
+		}
+
+		response = requests.post(this.callback_url, data=data, files=files)
+		logging.info(f"Callback response: {response.text} ({response.status_code})")
+		return f"Message sent to TTS: {message}"
 
 	# END Tools
