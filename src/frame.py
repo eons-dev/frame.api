@@ -58,7 +58,7 @@ You should keep your answers succinct while remaining courteous and kind. The us
 		this.arg.kw.optional['tool_recurse_on'] = ['execute_linux_command']
 		this.arg.kw.optional['tool_endpoint_frames'] = "http://localhost:6969/message"
 		this.arg.kw.optional['tool_endpoint_speak'] = "http://localhost:6669"
-		this.arg.kw.optional['tool_endpoint_command'] = "http://linux-command-agent:80/execute"
+		this.arg.kw.optional['tool_endpoint_command'] = "http://localhost:8080/execute"
 
 		this.arg.kw.optional['audio'] = None
 		this.arg.kw.optional['image'] = None
@@ -93,7 +93,7 @@ You should keep your answers succinct while remaining courteous and kind. The us
 			},
 			{
 				"name": "execute_linux_command",
-				"description": "Execute a Linux command in a sandboxed environment and return the output",
+				"description": "Execute a Linux command and return the output; reminder: check file sizes before reading them",
 				"parameters": {
 					"type": "object",
 					"properties": {
@@ -244,7 +244,7 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 
 			# Recurse to process the prompt again
 			if (function_name in this.tool_recurse_on):
-				if (this.tool_recursion_max - this.recursionCounter < 10)
+				if (this.tool_recursion_max - this.recursionCounter < 10):
 					this.SaveChatHistory("system", f"{this.tool_recursion_max - this.recursionCounter} recursions remaining. Please prompt the user to continue.")
 
 				return this.ProcessPrompt()
