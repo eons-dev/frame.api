@@ -24,6 +24,7 @@ class ChatHistory(SQLModelBase):
 	timestamp = Column(DateTime, default=datetime.utcnow)
 	role = Column(String, nullable=False)
 	content = Column(Text, nullable=False)
+	name = Column(String, nullable=True) # For openai function compatibility
 
 
 class frame (apie.Endpoint):
@@ -153,9 +154,18 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 	
 
 	# Save a chat message to the database
-	def SaveChatHistory(this, role, content):
+	def SaveChatHistory(this, role, content, name=None):
+		this.messages.append({
+			"role": role,
+			"content": [
+				{"type": "text", "text": content}
+			]
+		})
+		if (name is not None):
+			this.messages[-1].update({"name": name})
+
 		with this.sql() as session:
-			chat_entry = ChatHistory(role=role, content=content)
+			chat_entry = ChatHistory(role=role, content=content, name=name)
 			session.add(chat_entry)
 			session.commit()
 
@@ -222,6 +232,8 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 
 		reply = response.choices[0].message.content
 		logging.debug(f"Response ({response.choices[0].finish_reason}): {reply}")
+		if (reply is not None):
+			this.SaveChatHistory("assistant", reply)
 
 		if (response.choices[0].finish_reason == "function_call"):
 			function_name = response.choices[0].message.function_call.name
@@ -237,7 +249,7 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 			try:
 				function_response = getattr(this, f"tool_{function_name}")(function_args)
 				if (function_name in this.tool_recurse_on):
-					this.SaveChatHistory("function", function_response)
+					this.SaveChatHistory("function", function_response, name=function_name)
 			except Exception as e:
 				logging.error(f"Failed to execute tool '{function_name}': {e}")
 				return f"[ERROR] Failed to execute tool '{function_name}': {e}"
@@ -286,6 +298,11 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 
 	def GetPromptMessages(this):
 		messages = this.messages
+		
+		# Skip the following work if we've already done it.
+		if (this.recursionCounter > 0):
+			return messages
+
 		if (not len(messages)):
 			messages = [{
 				"role": "system",
@@ -365,6 +382,7 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 	
 	def tool_speak_aloud(this, function_args):
 		message = function_args['message']
+		this.SaveChatHistory("assistant", message)
 		audio = this.TTS(message)
 
 		data = {
@@ -388,7 +406,7 @@ NOTE: The system_prompt is essentially static. It is only used if the messages a
 		response = requests.post(this.tool_endpoint_command, json={"command": command})
 
 		if response.status_code == 200:
-			return response.json()["output"]
+			return json.dumps(response.json())
 		else:
 			return f"[ERROR] Command execution failed: {response.text}"
 
